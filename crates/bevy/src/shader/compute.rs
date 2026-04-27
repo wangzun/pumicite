@@ -31,6 +31,7 @@ impl ComputePipeline {
 ///
 /// Loads compute pipeline configurations and creates Vulkan compute pipelines.
 #[cfg(any(feature = "ron", feature = "postcard"))]
+#[derive(TypePath)]
 pub struct ComputePipelineLoader {
     pipeline_cache: Arc<PipelineCache>,
     heap: Option<DescriptorHeap>,
@@ -62,10 +63,7 @@ impl AssetLoader for ComputePipelineLoader {
     ) -> Result<ComputePipeline, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let ext = load_context
-            .asset_path()
-            .get_full_extension()
-            .unwrap_or_default();
+        let ext = load_context.path().get_full_extension().unwrap_or_default();
         let pipeline: pumicite_types::ComputePipeline = super::deserialize(&bytes, &ext)?;
 
         let layout = match &pipeline.layout {
@@ -118,7 +116,7 @@ impl AssetLoader for ComputePipelineLoader {
         let span = tracing::span!(
             tracing::Level::INFO,
             "Creating Compute Pipeline",
-            path = load_context.asset_path().to_string()
+            path = load_context.path().to_string()
         )
         .entered();
         let pipeline = self.pipeline_cache.create_compute_pipeline(

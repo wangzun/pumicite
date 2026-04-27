@@ -45,6 +45,7 @@ impl Deref for GraphicsPipeline {
 /// - Specialization constants
 /// - Pipeline variants
 #[cfg(any(feature = "ron", feature = "postcard"))]
+#[derive(TypePath)]
 pub struct GraphicsPipelineLoader {
     pipeline_cache: Arc<PipelineCache>,
     heap: Option<DescriptorHeap>,
@@ -72,10 +73,7 @@ impl AssetLoader for GraphicsPipelineLoader {
     ) -> Result<GraphicsPipeline, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let ext = load_context
-            .asset_path()
-            .get_full_extension()
-            .unwrap_or_default();
+        let ext = load_context.path().get_full_extension().unwrap_or_default();
         let mut pipeline: pumicite_types::GraphicsPipeline = super::deserialize(&bytes, &ext)?;
         settings.apply_on(&mut pipeline);
 
@@ -621,7 +619,7 @@ impl AssetLoader for GraphicsPipelineLoader {
         let span = tracing::span!(
             tracing::Level::INFO,
             "Creating Graphics Pipeline",
-            path = load_context.asset_path().to_string()
+            path = load_context.path().to_string()
         )
         .entered();
         let pipeline = self

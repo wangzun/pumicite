@@ -5,9 +5,7 @@ use std::{
 };
 
 use bevy_app::{Plugin, PostUpdate};
-use bevy_asset::{
-    Asset, AssetApp, AssetEvent, AssetHandleProvider, AssetId, AssetServer, Assets, Handle,
-};
+use bevy_asset::{Asset, AssetApp, AssetEvent, AssetHandleProvider, AssetId, Assets, Handle};
 use bevy_ecs::prelude::*;
 use bevy_reflect::TypePath;
 use pumicite::{
@@ -173,8 +171,8 @@ impl RtxPipelineManager {
 
 pub fn build_rtx_pipeline_system(
     manager: ResMut<RtxPipelineManager>,
-    asset_server: Res<AssetServer>,
     libraries: Res<Assets<RayTracingPipelineLibrary>>,
+    mut pipelines: ResMut<Assets<RayTracingPipeline>>,
     mut rtx_pipeline_update_event: MessageReader<AssetEvent<RayTracingPipelineLibrary>>,
     pipeline_cache: Res<PipelineCache>,
 ) {
@@ -270,47 +268,55 @@ pub fn build_rtx_pipeline_system(
             let layout = layout.unwrap();
             // Remove LIBRARY_KHR flag since this is a final monolithic pipeline.
             let flags = flags & !vk::PipelineCreateFlags::LIBRARY_KHR;
-            asset_server.update_async::<RayTracingPipeline, vk::Result>(handle, async move {
-                let rtx_pipeline = pipeline_cache.create_ray_tracing_pipeline_monolithic(
-                    RayTracingPipelineLibraryCreateInfo {
-                        flags,
-                        layout,
-                        max_ray_recursion_depth,
-                        max_ray_payload_size,
-                        max_hit_attribute_size,
-                        dynamic_stack_size,
-                        shaders: &merged_shaders,
-                        groups: &merged_groups,
-                    },
-                )?;
-                tracing::info!("Pipeline {} updated (inline)", id);
-                Ok(RayTracingPipeline {
-                    inner: Arc::new(rtx_pipeline),
-                    layout: sbt_layout,
-                    hitgroup_mask,
+            let rtx_pipeline = pipeline_cache
+                .create_ray_tracing_pipeline_monolithic(RayTracingPipelineLibraryCreateInfo {
+                    flags,
+                    layout,
+                    max_ray_recursion_depth,
+                    max_ray_payload_size,
+                    max_hit_attribute_size,
+                    dynamic_stack_size,
+                    shaders: &merged_shaders,
+                    groups: &merged_groups,
                 })
-            });
+                .unwrap();
+            tracing::info!("Pipeline {} updated (inline)", id);
+            pipelines
+                .insert(
+                    id,
+                    RayTracingPipeline {
+                        inner: Arc::new(rtx_pipeline),
+                        layout: sbt_layout,
+                        hitgroup_mask,
+                    },
+                )
+                .unwrap();
         } else if build_linked {
             // Library path: link pre-compiled pipeline libraries.
             let libraries = all_libraries
                 .iter()
                 .map(|lib| lib.pipeline().clone())
                 .collect::<Vec<Arc<Pipeline>>>();
-            asset_server.update_async::<RayTracingPipeline, vk::Result>(handle, async move {
-                let rtx_pipeline = pipeline_cache.create_ray_tracing_pipeline(
+            let rtx_pipeline = pipeline_cache
+                .create_ray_tracing_pipeline(
                     libraries,
                     max_ray_recursion_depth,
                     max_ray_payload_size,
                     max_hit_attribute_size,
                     dynamic_stack_size,
-                )?;
-                tracing::info!("Pipeline {} updated", id);
-                Ok(RayTracingPipeline {
-                    inner: Arc::new(rtx_pipeline),
-                    layout: sbt_layout,
-                    hitgroup_mask,
-                })
-            });
+                )
+                .unwrap();
+            tracing::info!("Pipeline {} updated", id);
+            pipelines
+                .insert(
+                    id,
+                    RayTracingPipeline {
+                        inner: Arc::new(rtx_pipeline),
+                        layout: sbt_layout,
+                        hitgroup_mask,
+                    },
+                )
+                .unwrap();
         } else {
             // Has a mix of linked / monolithic libs
             panic!()

@@ -15,11 +15,10 @@ use std::ffi::{CStr, CString};
 
 use crate::{
     DescriptorHeap, SubmissionState, shader::ShaderModule, staging::AsyncTransfer,
-    swapchain::SwapchainSet,
+    swapchain::SwapchainSet, system::SubmissionStates,
 };
 
-use super::pass::SubmissionSetsPass;
-use super::queue::QueueConfiguration;
+use super::{pass::SubmissionSetRegistry, queue::QueueConfiguration};
 use pumicite::{
     Device, Extension, Instance, MissingFeatureError,
     device::DeviceBuilder,
@@ -290,6 +289,8 @@ impl Plugin for PumicitePlugin {
             .as_mut()
             .unwrap()
             .add_build_pass(super::pass::SubmissionSetsPass::default());
+        app.init_resource::<SubmissionStates>();
+        app.init_resource::<SubmissionSetRegistry>();
 
         app.add_submission_set::<super::queue::RenderQueue>(
             DefaultRenderSet,
@@ -789,18 +790,44 @@ impl PumiciteApp for App {
         let component_id = queue_config
             .component_id_of_queue::<Q>()
             .expect("Please register this queue first");
+        let state_id = self
+            .world_mut()
+            .resource_mut::<SubmissionStates>()
+            .allocate();
+        self.world_mut()
+            .resource_mut::<SubmissionSetRegistry>()
+            .register(set.intern(), state_id);
+        let name = std::any::type_name_of_val(&set)
+            .split("::")
+            .last()
+            .unwrap_or("SubmissionSet");
+        let debug_color = config.debug_color;
 
-        let schedule = self.get_schedule_mut(PostUpdate).unwrap();
-        let build_pass = schedule.get_build_pass_mut::<SubmissionSetsPass>().unwrap();
-        build_pass
-            .submission_sets_to_queue
-            .insert(set.intern(), (component_id, config));
+        self.add_systems(
+            PostUpdate,
+            (
+                (move |world: &mut World| {
+                    crate::system::initialize_submission_state(
+                        world,
+                        state_id,
+                        component_id,
+                        name,
+                        debug_color,
+                    );
+                    crate::system::prelude_system(world, state_id);
+                })
+                .before(set),
+                (move |world: &mut World| {
+                    crate::system::submission_system(world, state_id, component_id);
+                })
+                .after(set),
+            ),
+        );
         self
     }
 
     fn add_render_set<M>(&mut self, set: impl SystemSet, system: impl IntoSystem<(), (), M>) {
         let interned_set = set.intern();
-        let schedule = self.get_schedule_mut(PostUpdate).unwrap();
         let name = std::any::type_name_of_val(&set);
 
         let start_render_set_debug_system = move |mut state: SubmissionState| {
@@ -813,20 +840,14 @@ impl PumiciteApp for App {
             });
         };
 
-        // Add the config system to the schedule graph, placing it inside the render set
-        let result = schedule.graph_mut().process_configs(
-            start_render_set_debug_system
-                .pipe(system)
-                .in_set(set)
-                .into_configs(),
-            true,
+        self.add_systems(
+            PostUpdate,
+            (
+                start_render_set_debug_system
+                    .pipe(system)
+                    .before(interned_set),
+                crate::system::render_set_ending_system.after(interned_set),
+            ),
         );
-        assert_eq!(result.nodes.len(), 1);
-        let system_key = result.nodes[0].as_system().unwrap();
-
-        let build_pass = schedule.get_build_pass_mut::<SubmissionSetsPass>().unwrap();
-        build_pass
-            .render_sets_to_systems
-            .insert(interned_set, system_key);
     }
 }

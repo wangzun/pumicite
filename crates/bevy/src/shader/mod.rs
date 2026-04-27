@@ -80,6 +80,7 @@ pub enum ShaderLoadError {
 ///
 /// Loads compiled SPIR-V bytecode and creates Vulkan shader modules.
 /// Modules are cached by path to avoid creating duplicates.
+#[derive(TypePath)]
 pub struct ShaderLoader {
     device: Device,
     cache: async_lock::Mutex<HashMap<AssetPath<'static>, Weak<pumicite::pipeline::ShaderModule>>>,
@@ -112,7 +113,7 @@ impl AssetLoader for ShaderLoader {
         load_context: &mut bevy_asset::LoadContext<'_>,
     ) -> Result<ShaderModule, Self::Error> {
         let mut lock = self.cache.lock().await;
-        if let Some(cached) = lock.get(load_context.asset_path()).and_then(Weak::upgrade) {
+        if let Some(cached) = lock.get(load_context.path()).and_then(Weak::upgrade) {
             return Ok(ShaderModule(cached));
         };
 
@@ -120,7 +121,7 @@ impl AssetLoader for ShaderLoader {
         reader.read_to_end(&mut code).await?;
         let item = pumicite::pipeline::ShaderModule::new(self.device.clone(), &code)?;
         let item = Arc::new(item);
-        lock.insert(load_context.asset_path().clone(), Arc::downgrade(&item));
+        lock.insert(load_context.path().clone(), Arc::downgrade(&item));
         Ok(ShaderModule(item))
     }
 
@@ -182,6 +183,7 @@ fn deserialize<T: serde::de::DeserializeOwned>(
 /// Creates pipeline libraries that can be linked into complete ray tracing pipelines
 /// via [`RtxPipelineManager`](crate::rtx::RtxPipelineManager).
 #[cfg(any(feature = "ron", feature = "postcard"))]
+#[derive(TypePath)]
 pub struct RayTracingPipelineLoader {
     pipeline_cache: Arc<PipelineCache>,
     heap: Option<DescriptorHeap>,
@@ -316,10 +318,7 @@ impl AssetLoader for RayTracingPipelineLoader {
     ) -> Result<RayTracingPipelineLibrary, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let ext = load_context
-            .asset_path()
-            .get_full_extension()
-            .unwrap_or_default();
+        let ext = load_context.path().get_full_extension().unwrap_or_default();
         let pipeline: pumicite_types::RayTracingPipeline = deserialize(&bytes, &ext)?;
 
         let layout = match &pipeline.layout {
@@ -520,7 +519,7 @@ impl AssetLoader for RayTracingPipelineLoader {
             let span = tracing::span!(
                 tracing::Level::INFO,
                 "Creating Ray Tracing Pipeline Library",
-                path = load_context.asset_path().to_string()
+                path = load_context.path().to_string()
             )
             .entered();
             let pipeline_obj = self.pipeline_cache.create_ray_tracing_pipeline_library(
@@ -580,6 +579,7 @@ impl AssetLoader for RayTracingPipelineLoader {
 /// Loads pipeline layout configurations including descriptor set layouts
 /// and push constant ranges. Layouts are cached by path.
 #[cfg(any(feature = "ron", feature = "postcard"))]
+#[derive(TypePath)]
 pub struct PipelineLayoutLoader {
     device: Device,
     cache: async_lock::Mutex<HashMap<AssetPath<'static>, Weak<pumicite::pipeline::PipelineLayout>>>,
@@ -671,16 +671,13 @@ impl AssetLoader for PipelineLayoutLoader {
         load_context: &mut bevy_asset::LoadContext<'_>,
     ) -> Result<pumicite::bevy::PipelineLayout, Self::Error> {
         let mut lock = self.cache.lock().await;
-        if let Some(cached) = lock.get(load_context.asset_path()).and_then(Weak::upgrade) {
+        if let Some(cached) = lock.get(load_context.path()).and_then(Weak::upgrade) {
             return Ok(pumicite::bevy::PipelineLayout(cached));
         }
 
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let ext = load_context
-            .asset_path()
-            .get_full_extension()
-            .unwrap_or_default();
+        let ext = load_context.path().get_full_extension().unwrap_or_default();
         let layout: pumicite_types::PipelineLayout = deserialize(&bytes, &ext)?;
 
         let layout = Self::load_inner(
@@ -690,10 +687,7 @@ impl AssetLoader for PipelineLayoutLoader {
             load_context,
         )
         .await?;
-        lock.insert(
-            load_context.asset_path().clone_owned(),
-            Arc::downgrade(&layout),
-        );
+        lock.insert(load_context.path().clone_owned(), Arc::downgrade(&layout));
         drop(lock);
 
         Ok(layout)
@@ -713,6 +707,7 @@ impl AssetLoader for PipelineLayoutLoader {
 ///
 /// Used internally by pipeline loaders. Descriptor set layouts are cached.
 #[cfg(any(feature = "ron", feature = "postcard"))]
+#[derive(TypePath)]
 pub struct DescriptorSetLayoutLoader {
     device: Device,
     cache: async_lock::Mutex<
@@ -775,23 +770,17 @@ impl AssetLoader for DescriptorSetLayoutLoader {
         load_context: &mut bevy_asset::LoadContext<'_>,
     ) -> Result<pumicite::bevy::DescriptorSetLayout, Self::Error> {
         let mut lock = self.cache.lock().await;
-        if let Some(cached) = lock.get(load_context.asset_path()).and_then(Weak::upgrade) {
+        if let Some(cached) = lock.get(load_context.path()).and_then(Weak::upgrade) {
             return Ok(pumicite::bevy::DescriptorSetLayout(cached));
         }
 
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let ext = load_context
-            .asset_path()
-            .get_full_extension()
-            .unwrap_or_default();
+        let ext = load_context.path().get_full_extension().unwrap_or_default();
         let layout: pumicite_types::DescriptorSetLayout = deserialize(&bytes, &ext)?;
 
         let layout = Self::load_inner(&layout, self.device.clone())?;
-        lock.insert(
-            load_context.asset_path().clone_owned(),
-            Arc::downgrade(&layout),
-        );
+        lock.insert(load_context.path().clone_owned(), Arc::downgrade(&layout));
 
         drop(lock);
         Ok(layout)

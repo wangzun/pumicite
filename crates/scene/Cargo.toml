@@ -17,13 +17,13 @@ gltf = { version = "1.4.0", default-features = false, features = [
   "names",
   "utils",
 ] }
-bevy_ecs = "0.17.0-dev"
-bevy_asset = "0.17.0-dev"
-bevy_scene = "0.17.0-dev"
-bevy_transform = "0.17.0-dev"
-bevy_reflect = "0.17.0-dev"
-bevy_tasks = "0.17.0-dev"
-bevy_app = "0.17.0-dev"
+bevy_ecs = "0.18.1"
+bevy_asset = "0.18.1"
+bevy_scene = "0.18.1"
+bevy_transform = "0.18.1"
+bevy_reflect = "0.18.1"
+bevy_tasks = "0.18.1"
+bevy_app = "0.18.1"
 thiserror = "2"
 bevy_pumicite = { path = "../bevy" }
 bytemuck = "1.23"

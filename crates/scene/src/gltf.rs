@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, sync::Arc, u32};
 
 use bevy_app::Plugin;
 use bevy_asset::{
-    AssetApp, AssetLoader, Assets, AsyncReadExt, Handle, LoadContext, ParseAssetPathError,
-    io::AsyncSeekForwardExt,
+    AssetApp, AssetLoader, Assets, AsyncReadExt, AsyncSeekExt, Handle, LoadContext,
+    ParseAssetPathError,
 };
 use bevy_ecs::{
     component::Component,
@@ -23,7 +23,7 @@ use bevy_pumicite::{
     },
     staging::AsyncTransferGuard,
 };
-use bevy_reflect::Reflect;
+use bevy_reflect::{Reflect, TypePath};
 use bevy_tasks::ConditionalSendFuture;
 use bevy_transform::components::{GlobalTransform, Transform};
 use bytemuck::{AnyBitPattern, NoUninit};
@@ -156,6 +156,7 @@ pub enum GltfError {
     AssetError(#[from] bevy_asset::ReadAssetBytesError),
 }
 
+#[derive(TypePath)]
 pub struct GltfLoader {
     transfer: bevy_pumicite::staging::AsyncTransfer,
     allocator: Allocator,
@@ -407,7 +408,11 @@ impl AssetLoader for GltfLoader {
                         for (_, (view, cpu_view, gpu_view)) in buffer_views.into_iter() {
                             let bytes_to_skip = view.offset() as isize - current_head as isize;
                             if bytes_to_skip > 0 {
-                                reader.seek_forward(bytes_to_skip as u64).await?;
+                                reader
+                                    .seekable()
+                                    .map_err(|err| std::io::Error::other(err))?
+                                    .seek(std::io::SeekFrom::Current(bytes_to_skip as i64))
+                                    .await?;
                             } else if bytes_to_skip < 0 {
                                 return Err(GltfError::OverlappingBufferView);
                             }
@@ -520,10 +525,12 @@ impl AssetLoader for GltfLoader {
                         }
                         gltf::buffer::Source::Uri(uri) => {
                             let buffer_path = load_context
-                                .asset_path()
+                                .path()
                                 .resolve_embed(uri)
                                 .map_err(|err| GltfError::InvalidBufferUri(uri.to_owned(), err))?;
-                            let mut current_reader = load_context.read_asset(buffer_path).await?;
+                            let mut current_reader = bevy_asset::io::VecReader::new(
+                                load_context.read_asset_bytes(buffer_path).await?,
+                            );
                             read_from_reader(
                                 &mut current_reader,
                                 &mut batch,
@@ -717,7 +724,7 @@ impl GltfLoader {
                     }
                     gltf::image::Source::Uri { uri, .. } => {
                         let buffer_path = load_context
-                            .asset_path()
+                            .path()
                             .resolve_embed(uri)
                             .map_err(|err| GltfError::InvalidBufferUri(uri.to_owned(), err))?;
                         let handle = load_context.load::<TextureAsset>(buffer_path);

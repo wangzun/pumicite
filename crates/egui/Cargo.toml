@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy_ecs = { version = "0.17.0-dev" }
-bevy_app = { version = "0.17.0-dev" }
-bevy_window = { version = "0.17.0-dev" }
-bevy_asset = { version = "0.17.0-dev" }
+bevy_ecs = { version = "0.18.1" }
+bevy_app = { version = "0.18.1" }
+bevy_window = { version = "0.18.1" }
+bevy_asset = { version = "0.18.1" }
 glam = "0.30"
 pumicite = { path = "../../" }
 bevy_pumicite = { path = "../bevy" }
@@ -15,6 +15,6 @@ bytemuck = "1.23"
 tracing = "0.1"
 
 [dependencies.bevy_egui]
-version = "0.37"
+version = "0.39.1"
 default-features = false
 features = ["manage_clipboard", "open_url", "default_fonts"]

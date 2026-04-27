@@ -61,7 +61,8 @@ use std::{
 };
 
 use bevy_ecs::{
-    component::{ComponentId, Tick},
+    change_detection::Tick,
+    component::ComponentId,
     prelude::*,
     ptr::OwningPtr,
     system::{SystemMeta, SystemParam},
@@ -245,16 +246,6 @@ unsafe impl<'a, T: 'static> SystemParam for Queue<'a, T> {
     type State = ComponentId;
 
     type Item<'world, 'state> = Queue<'world, T>;
-    fn configurate(
-        state: &mut Self::State,
-        _meta: &mut SystemMeta,
-        config: &mut dyn std::any::Any,
-    ) {
-        if let Some(config) = config.downcast_mut::<QueueConfig>() {
-            *state = config.0;
-        }
-    }
-
     fn init_state(world: &mut World) -> ComponentId {
         if std::any::TypeId::of::<()>() == std::any::TypeId::of::<T>() {
             return ComponentId::new(usize::MAX);
@@ -323,9 +314,6 @@ unsafe impl<'a, T: 'static> SystemParam for Queue<'a, T> {
         component_access_set.add_unfiltered_resource_write(component_id);
     }
 }
-
-/// Configuration token for associating systems with queues.
-pub struct QueueConfig(pub ComponentId);
 
 /// Marker type for the primary graphics/render queue.
 ///
