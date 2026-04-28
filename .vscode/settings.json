@@ -1,0 +1,4 @@
+{
+    "rust-analyzer.rustc.source": "discover",
+    "rust-analyzer.server.path": "/Users/wz/.rustup/toolchains/nightly-aarch64-apple-darwin/bin/rust-analyzer"
+}
