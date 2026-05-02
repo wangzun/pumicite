@@ -636,7 +636,7 @@ pub trait PumiciteApp {
     ///
     /// ```no_run
     ///# use bevy::prelude::*;
-    ///# use bevy_pumicite::{SubmissionState, DefaultRenderSet};
+    ///# use bevy_pumicite::{DefaultRenderSet, PumiciteApp, SubmissionState};
     ///# #[derive(Debug, SystemSet, Hash, PartialEq, Eq, Clone, Copy)]
     ///# struct MyRenderSet;
     ///# fn begin_my_render_pass(ctx: SubmissionState) {}
@@ -790,39 +790,11 @@ impl PumiciteApp for App {
         let component_id = queue_config
             .component_id_of_queue::<Q>()
             .expect("Please register this queue first");
-        let state_id = self
-            .world_mut()
-            .resource_mut::<SubmissionStates>()
-            .allocate();
-        self.world_mut()
-            .resource_mut::<SubmissionSetRegistry>()
-            .register(set.intern(), state_id);
-        let name = std::any::type_name_of_val(&set)
-            .split("::")
-            .last()
-            .unwrap_or("SubmissionSet");
-        let debug_color = config.debug_color;
 
-        self.add_systems(
-            PostUpdate,
-            (
-                (move |world: &mut World| {
-                    crate::system::initialize_submission_state(
-                        world,
-                        state_id,
-                        component_id,
-                        name,
-                        debug_color,
-                    );
-                    crate::system::prelude_system(world, state_id);
-                })
-                .before(set),
-                (move |world: &mut World| {
-                    crate::system::submission_system(world, state_id, component_id);
-                })
-                .after(set),
-            ),
-        );
+        let mut build_pass = self.world_mut().resource_mut::<SubmissionSetRegistry>();
+        build_pass
+            .submission_sets_to_queue
+            .insert(set.intern(), (component_id, config));
         self
     }
 
@@ -840,14 +812,42 @@ impl PumiciteApp for App {
             });
         };
 
-        self.add_systems(
-            PostUpdate,
-            (
+        let system_key = {
+            let schedule = self.get_schedule_mut(PostUpdate).unwrap();
+            let existing_systems = schedule
+                .graph()
+                .systems
+                .iter()
+                .map(|(key, _, _)| key)
+                .collect::<Vec<_>>();
+
+            schedule.add_systems(
                 start_render_set_debug_system
                     .pipe(system)
-                    .before(interned_set),
-                crate::system::render_set_ending_system.after(interned_set),
-            ),
-        );
+                    .in_set(set)
+                    .into_configs(),
+            );
+
+            let added_systems = schedule
+                .graph()
+                .systems
+                .iter()
+                .map(|(key, _, _)| key)
+                .filter(|key| !existing_systems.contains(key))
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                added_systems.len(),
+                1,
+                "add_render_set should add exactly one system"
+            );
+            added_systems[0]
+        };
+
+        let mut build_pass = self.world_mut().resource_mut::<SubmissionSetRegistry>();
+        // Add the config system to the schedule graph, placing it inside the render set
+        build_pass
+            .render_sets_to_systems
+            .insert(interned_set, system_key);
     }
 }

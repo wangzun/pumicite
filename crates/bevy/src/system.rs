@@ -21,13 +21,14 @@
 //! ```no_run
 //! use bevy::prelude::*;
 //! use bevy_pumicite::{SubmissionState, DefaultRenderSet};
+//! # let mut app = App::new();
 //!
 //! fn my_render_system(mut ctx: SubmissionState) {
 //!     ctx.record(|encoder| {
 //!         // Record transfer, compute, or setup commands
 //!     });
 //!
-//!     ctx.render(|render_pass| {
+//!     ctx.render(|mut render_pass| {
 //!         // Record rendering commands inside an active render pass
 //!         render_pass.draw(0..3, 0..1);
 //!     });
@@ -48,6 +49,7 @@
 use bevy_ecs::{
     change_detection::Tick,
     component::ComponentId,
+    ptr::OwningPtr,
     resource::Resource,
     system::{SystemMeta, SystemParam},
     world::{Mut, World, unsafe_world_cell::UnsafeWorldCell},
@@ -70,27 +72,12 @@ use super::queue::SharedQueue;
 
 #[derive(Resource, Default)]
 pub(crate) struct SubmissionStates {
-    active: Option<usize>,
-    system_states: HashMap<String, usize>,
-    states: Vec<Option<RenderSetSharedState>>,
+    system_states: HashMap<String, ComponentId>,
 }
 
 impl SubmissionStates {
-    pub(crate) fn allocate(&mut self) -> usize {
-        let id = self.states.len();
-        self.states.push(None);
-        id
-    }
-
-    fn get_mut(&mut self, id: usize) -> &mut RenderSetSharedState {
-        self.states
-            .get_mut(id)
-            .and_then(Option::as_mut)
-            .expect("Submission state was not initialized")
-    }
-
-    pub(crate) fn set_system_state(&mut self, system: String, id: usize) {
-        self.system_states.insert(system, id);
+    pub(crate) fn set_system_state(&mut self, system: String, state: ComponentId) {
+        self.system_states.insert(system, state);
     }
 
     pub(crate) fn clear_system_states(&mut self) {
@@ -183,13 +170,14 @@ unsafe impl Sync for RenderSetSharedState {}
 /// ```no_run
 /// use bevy::prelude::*;
 /// use bevy_pumicite::{SubmissionState, DefaultRenderSet};
+/// # let mut app = App::new();
 ///
 /// fn my_render_system(mut ctx: SubmissionState) {
 ///     ctx.record(|encoder| {
 ///         // Record transfer, compute, or setup commands
 ///     });
 ///
-///     ctx.render(|render_pass| {
+///     ctx.render(|mut render_pass| {
 ///         // Record rendering commands inside an active render pass
 ///         render_pass.draw(0..3, 0..1);
 ///     });
@@ -199,12 +187,11 @@ unsafe impl Sync for RenderSetSharedState {}
 /// app.add_systems(PostUpdate, my_render_system.in_set(DefaultRenderSet));
 /// ```
 pub struct SubmissionState<'world> {
-    states: Mut<'world, SubmissionStates>,
-    id: usize,
+    state: Mut<'world, RenderSetSharedState>,
 }
 impl SubmissionState<'_> {
     fn state_mut(&mut self) -> &mut RenderSetSharedState {
-        self.states.get_mut(self.id)
+        self.state.as_mut()
     }
 
     /// Encode commands outside an active render pass.
@@ -242,13 +229,7 @@ impl SubmissionState<'_> {
     }
 
     pub fn state(&self) -> &CommandEncoderRenderPassState {
-        self.states
-            .states
-            .get(self.id)
-            .and_then(Option::as_ref)
-            .expect("Submission state was not initialized")
-            .encoder
-            .render_pass_state()
+        self.state.encoder.render_pass_state()
     }
 }
 
@@ -272,20 +253,27 @@ unsafe impl SystemParam for SubmissionState<'_> {
         _change_tick: Tick,
     ) -> Self::Item<'world, 'state> {
         unsafe {
-            let states: Mut<'world, SubmissionStates> =
-                world.get_resource_mut_by_id(*state).unwrap().with_type();
-            let id = states
-                .system_states
-                .get::<str>(system_meta.name())
-                .copied()
-                .or(states.active);
-            let Some(id) = id else {
+            let states: &'world SubmissionStates = world
+                .get_resource_by_id(*state)
+                .unwrap()
+                .deref::<SubmissionStates>();
+            let state_component_id = states.system_states.get::<str>(system_meta.name()).copied();
+            let Some(state_component_id) = state_component_id else {
                 panic!(
                     "System {} was not running inside an active SubmissionSet!",
                     system_meta.name()
                 )
             };
-            SubmissionState { states, id }
+            let state: Mut<'world, RenderSetSharedState> = world
+                .get_resource_mut_by_id(state_component_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Submission state for system {} was not initialized",
+                        system_meta.name()
+                    )
+                })
+                .with_type();
+            SubmissionState { state }
         }
     }
 
@@ -303,23 +291,18 @@ unsafe impl SystemParam for SubmissionState<'_> {
         component_access_set: &mut bevy_ecs::query::FilteredAccessSet,
         _world: &mut World,
     ) {
-        component_access_set.add_unfiltered_resource_write(*state);
+        component_access_set.add_unfiltered_resource_read(*state);
     }
 }
 
 pub(crate) fn initialize_submission_state(
     world: &mut World,
-    state_id: usize,
+    state_component_id: ComponentId,
     queue_component_id: ComponentId,
-    name: &'static str,
+    name: &str,
     color: Vec4,
 ) {
-    let needs_init = world
-        .resource::<SubmissionStates>()
-        .states
-        .get(state_id)
-        .is_none_or(Option::is_none);
-    if needs_init {
+    if world.get_resource_by_id(state_component_id).is_none() {
         let device = world.resource::<Device>().clone();
         let queue_family_index = unsafe {
             world
@@ -330,14 +313,24 @@ pub(crate) fn initialize_submission_state(
         };
         let state =
             RenderSetSharedState::new(device, queue_family_index, name.to_string(), color).unwrap();
-        world.resource_mut::<SubmissionStates>().states[state_id] = Some(state);
+        OwningPtr::make(state, |ptr| unsafe {
+            world.insert_resource_by_id(
+                state_component_id,
+                ptr,
+                bevy_ecs::change_detection::MaybeLocation::caller(),
+            );
+        });
     }
 }
 
-pub(crate) fn prelude_system(world: &mut World, state_id: usize) {
-    let mut states = world.resource_mut::<SubmissionStates>();
-    states.active = Some(state_id);
-    let shared = states.get_mut(state_id);
+pub(crate) fn prelude_system(world: &mut World, state_component_id: ComponentId) {
+    let mut shared = unsafe {
+        world
+            .get_resource_mut_by_id(state_component_id)
+            .expect("Submission state was not initialized")
+            .with_type::<RenderSetSharedState>()
+    };
+    let shared = shared.as_mut();
     shared.stage_index = 0;
     assert!(shared.recording_command_buffer.is_none());
     let mut cb =
@@ -376,32 +369,38 @@ pub(crate) fn render_set_ending_system(mut shared: SubmissionState) {
 
 pub(crate) fn submission_system(
     world: &mut World,
-    state_id: usize,
+    state_component_id: ComponentId,
     queue_component_id: ComponentId,
 ) {
-    let mut states = world.resource_mut::<SubmissionStates>();
-    states.active = Some(state_id);
-    let shared = states.get_mut(state_id);
-    if let CommandEncoderRenderPassState::InsideRenderPass { start_location, .. } =
-        shared.encoder.render_pass_state()
-    {
-        tracing::warn!(
-            "`submission_system` reached at {} when there is an active render pass open. The active render pass was opened at {}",
-            std::panic::Location::caller(),
-            start_location
-        );
-    }
-    unsafe {
-        shared.encoder.reset();
-    }
-    let Some(mut cb) = shared.recording_command_buffer.take() else {
-        states.active = None;
+    let Some((mut cb, name, color)) = ({
+        let mut shared = unsafe {
+            world
+                .get_resource_mut_by_id(state_component_id)
+                .expect("Submission state was not initialized")
+                .with_type::<RenderSetSharedState>()
+        };
+        let shared = shared.as_mut();
+        if let CommandEncoderRenderPassState::InsideRenderPass { start_location, .. } =
+            shared.encoder.render_pass_state()
+        {
+            tracing::warn!(
+                "`submission_system` reached at {} when there is an active render pass open. The active render pass was opened at {}",
+                std::panic::Location::caller(),
+                start_location
+            );
+        }
+        unsafe {
+            shared.encoder.reset();
+        }
+        if let Some(mut cb) = shared.recording_command_buffer.take() {
+            shared.command_pool.finish(&mut cb).unwrap();
+            Some((cb, shared.name.clone(), shared.color))
+        } else {
+            None
+        }
+    }) else {
         return;
     };
-    shared.command_pool.finish(&mut cb).unwrap();
-    let name = shared.name.clone();
-    let color = shared.color;
-    drop(states);
 
     {
         let queue_resource = unsafe {
@@ -416,10 +415,14 @@ pub(crate) fn submission_system(
         queue.end_label();
     }
 
-    let mut states = world.resource_mut::<SubmissionStates>();
-    let shared = states.get_mut(state_id);
+    let mut shared = unsafe {
+        world
+            .get_resource_mut_by_id(state_component_id)
+            .expect("Submission state was not initialized")
+            .with_type::<RenderSetSharedState>()
+    };
+    let shared = shared.as_mut();
     shared.pending_command_buffers.push(cb);
-    states.active = None;
 }
 
 pub struct RingBuffer<T, const N: usize> {
