@@ -4,18 +4,21 @@ use std::{
     sync::Arc,
 };
 
-use bevy_app::{Plugin, PostUpdate};
-use bevy_asset::{Asset, AssetApp, AssetEvent, AssetHandleProvider, AssetId, Assets, Handle};
+use bevy_app::{Plugin, PostUpdate, Startup};
+use bevy_asset::{
+    Asset, AssetApp, AssetEvent, AssetHandleProvider, AssetId, AssetServer, Assets, Handle,
+};
 use bevy_ecs::prelude::*;
 use bevy_reflect::TypePath;
 use pumicite::{
     ash::vk,
     bevy::PipelineCache,
+    device::DeviceBuilder,
     pipeline::Pipeline,
     rtx::{RayTracingPipelineLibraryCreateInfo, SbtLayout, ShaderBindingTable},
 };
 
-use crate::{PumiciteApp, shader::RayTracingPipelineLibrary};
+use crate::{CreateDevice, shader::RayTracingPipelineLibrary};
 pub mod blas;
 pub mod tlas;
 
@@ -32,33 +35,59 @@ impl Plugin for RtxPipelinePlugin {
             #[cfg(feature = "postcard")]
             "rtx.pipeline.bin",
         ]);
-
-        app.add_device_extension::<pumicite::ash::khr::acceleration_structure::Meta>()
-            .unwrap();
-        app.add_device_extension::<pumicite::ash::khr::ray_tracing_pipeline::Meta>()
-            .unwrap();
-        app.add_device_extension::<pumicite::ash::khr::ray_tracing_maintenance1::Meta>()
-            .ok();
-        app.add_device_extension::<pumicite::ash::khr::pipeline_library::Meta>()
-            .ok();
-
-        app.enable_feature(
-            |rtx_features: &mut vk::PhysicalDeviceAccelerationStructureFeaturesKHR| {
-                &mut rtx_features.acceleration_structure
-            },
-        )
-        .unwrap();
-        app.enable_feature(
-            |rtx_features: &mut vk::PhysicalDeviceRayTracingPipelineFeaturesKHR| {
-                &mut rtx_features.ray_tracing_pipeline
-            },
-        )
-        .unwrap();
-    }
-    fn cleanup(&self, app: &mut bevy_app::App) {
         app.init_resource::<RtxPipelineManager>();
-        #[cfg(any(feature = "ron", feature = "postcard"))]
-        app.init_asset_loader::<crate::shader::RayTracingPipelineLoader>();
+
+        app.add_systems(
+            Startup,
+            (
+                (|mut device_builder: ResMut<DeviceBuilder>| {
+                    device_builder
+                        .enable_extension::<pumicite::ash::khr::acceleration_structure::Meta>()
+                        .unwrap();
+                    device_builder
+                        .enable_extension::<pumicite::ash::khr::ray_tracing_pipeline::Meta>()
+                        .unwrap();
+                    device_builder
+                        .enable_extension::<pumicite::ash::khr::ray_tracing_maintenance1::Meta>()
+                        .ok();
+                    device_builder
+                        .enable_extension::<pumicite::ash::khr::pipeline_library::Meta>()
+                        .ok();
+                    device_builder
+                        .enable_feature(
+                            |rtx_features: &mut vk::PhysicalDeviceAccelerationStructureFeaturesKHR| {
+                                &mut rtx_features.acceleration_structure
+                            },
+                        )
+                        .unwrap();
+                    device_builder
+                        .enable_feature(
+                            |rtx_features: &mut vk::PhysicalDeviceRayTracingPipelineFeaturesKHR| {
+                                &mut rtx_features.ray_tracing_pipeline
+                            },
+                        )
+                        .unwrap();
+                    device_builder
+                        .enable_feature(
+                            |rtx_features: &mut vk::PhysicalDeviceHostQueryResetFeatures| {
+                                &mut rtx_features.host_query_reset // For ray tracing AS compaction size query
+                            },
+                        )
+                        .unwrap();
+                })
+                .before(CreateDevice),
+                #[cfg(any(feature = "ron", feature = "postcard"))]
+                (|world: &mut World| {
+                    let asset_server = world
+                        .remove_resource::<AssetServer>()
+                        .expect("Requires asset server");
+                    asset_server
+                        .register_loader(crate::shader::RayTracingPipelineLoader::from_world(world));
+                    world.insert_resource(asset_server);
+                })
+                .after(CreateDevice),
+            ),
+        );
     }
 }
 

@@ -14,6 +14,7 @@ use bevy_ecs::{
 };
 use bevy_reflect::{Reflect, TypePath};
 use bevy_transform::components::GlobalTransform;
+use bytemuck::Pod;
 use pumicite::{
     Device,
     ash::{self, vk},
@@ -29,49 +30,59 @@ use crate::{
     staging::{BufferInitializer, DeviceLocalRingBuffer},
 };
 
-#[derive(Component, Reflect, MapEntities)]
+/// One ray-tracing instance in the TLAS, attached to an entity.
+///
+/// The entity's `GlobalTransform` becomes this instance's TLAS transform; the
+/// `blas` field points at another entity that holds the BLAS to instance.
+///
+/// `T` is custom per-instance data uploaded to GPU each frame in the same
+/// order as the TLAS instances, so SPIR-V `InstanceIndex()` indexes into a
+/// storage buffer parallel to the AS. Use `T = ()` or any other zero-sized
+/// marker struct if you don't need per-instance data — the upload is skipped
+/// when `size_of::<T>() == 0`.
+///
+/// `disabled` instances are filtered out of the TLAS build (and the `data`
+/// buffer); flip it to `false` once the BLAS, SBT offset, etc. are ready.
+#[derive(Component, Reflect, MapEntities, Copy, Clone)]
 #[reflect(opaque, Component, MapEntities)]
-pub struct TLASInstance<Marker> {
+pub struct TLASInstance<T: Pod> {
     /// TLAS builder will grab the BLAS on this entity
     #[entities]
     pub blas: Entity,
     pub instance_custom_index_and_mask: vk::Packed24_8,
     pub instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8,
 
+    /// When `true`, this instance is filtered out of the TLAS build *and* the
+    /// `tlas_per_instance_data` upload, so it contributes nothing to ray
+    /// traversal until re-enabled. Defaults to `true`; flip after the BLAS,
+    /// SBT offset, etc. are ready.
     pub disabled: bool,
-    _marker: PhantomData<Marker>,
+    /// Custom per-instance data. Each frame, after `GlobalTransform`
+    /// propagation, the value here is copied byte-for-byte into the
+    /// `tlas_per_instance_data` buffer at the slot matching this instance's
+    /// `InstanceIndex()`. Mutating this between frames updates what the GPU
+    /// sees on the next upload.
+    pub data: T,
 }
-impl<Marker> Clone for TLASInstance<Marker> {
-    fn clone(&self) -> Self {
-        Self {
-            blas: self.blas,
-            instance_custom_index_and_mask: self.instance_custom_index_and_mask,
-            instance_shader_binding_table_record_offset_and_flags: self
-                .instance_shader_binding_table_record_offset_and_flags,
-            disabled: self.disabled,
-            _marker: self._marker,
-        }
-    }
-}
-impl<Marker> Default for TLASInstance<Marker> {
+impl<T: Pod> Default for TLASInstance<T> {
     fn default() -> Self {
         Self {
             blas: Entity::PLACEHOLDER,
             instance_custom_index_and_mask: vk::Packed24_8::new(0, u8::MAX),
             instance_shader_binding_table_record_offset_and_flags: Default::default(),
             disabled: true,
-            _marker: Default::default(),
+            data: bytemuck::Zeroable::zeroed(),
         }
     }
 }
-impl<Marker> TLASInstance<Marker> {
+impl<T: Pod> TLASInstance<T> {
     pub fn new(blas: Entity) -> Self {
         Self {
             instance_custom_index_and_mask: vk::Packed24_8::new(0, u8::MAX),
             instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, 0),
             blas,
             disabled: true,
-            _marker: PhantomData,
+            data: T::zeroed(),
         }
     }
     pub fn set_flags(&mut self, flags: vk::GeometryInstanceFlagsKHR) {
@@ -96,13 +107,31 @@ impl<Marker> TLASInstance<Marker> {
         self.instance_custom_index_and_mask =
             vk::Packed24_8::new(self.instance_custom_index_and_mask.low_24(), mask);
     }
+    pub fn set_data(&mut self, data: T) {
+        self.data = data;
+    }
 }
 
+/// The top-level acceleration structure built from all enabled
+/// `TLASInstance<T>` entities, plus the per-instance data buffer parallel to
+/// it. Inserted by `TLASBuilderPlugin::<T>`.
+///
+/// Each `T` distinct payload type gets its own `TLAS<T>` resource and its own
+/// pair of build/upload systems — render systems pick the one matching the
+/// payload they want bound to shaders. Use `TLAS<()>` or any zero-sized marker
+/// struct if you don't need per-instance data
 #[derive(Resource)]
-pub struct TLAS<Marker = ()> {
+pub struct TLAS<T> {
     tlas: Option<GPUMutex<TLASInner>>,
     tlas_input_buffer: Option<(GPUMutex<RingBufferSuballocation>, Vec<Arc<AccelStruct>>)>,
-    _marker: PhantomData<Marker>,
+    /// Storage buffer of `T` values, one per enabled instance, in the same
+    /// order as the TLAS instances. Lock with `encoder.lock(...)` and bind to
+    /// shaders as a `StructuredBuffer<T>` indexed by SPIR-V `InstanceIndex()`.
+    ///
+    /// `None` when there are no enabled instances or when `size_of::<T>() == 0`.
+    /// The buffer is reallocated every frame inside the upload system.
+    pub tlas_per_instance_data: Option<GPUMutex<RingBufferSuballocation>>,
+    _marker: PhantomData<T>,
 }
 impl<Marker> TLAS<Marker> {
     pub fn get(&self) -> Option<&GPUMutex<TLASInner>> {
@@ -121,7 +150,24 @@ impl AsVkHandle for TLASInner {
     }
 }
 
-pub fn tlas_build_input_upload_system<T: Send + Sync + 'static>(
+/// Uploads two parallel buffers for the next TLAS build:
+///
+/// * `tlas_input_buffer` — `vk::AccelerationStructureInstanceKHR[]` consumed
+///   by `tlas_build_system`.
+/// * `tlas_per_instance_data` — `T[]` exposed on `TLAS<T>` for shaders to
+///   read as a `StructuredBuffer<T>`. Skipped when `size_of::<T>() == 0`.
+///
+/// **Ordering invariant:** both buffers iterate `Query<(&GlobalTransform,
+/// &TLASInstance<T>)>` with the same `disabled` / missing-BLAS filter and
+/// `enumerate()`, so slot `i` of the per-instance buffer corresponds to the
+/// `i`-th TLAS instance — i.e. SPIR-V `InstanceIndex() == i`.
+///
+/// Bevy's archetype iteration order is **not** stable across frames. The data
+/// in slot `i` therefore belongs to whichever entity happened to land at that
+/// position *this* frame; do not rely on a fixed `InstanceIndex()` for any
+/// given entity. Per-entity payloads work correctly because the entity's data
+/// is uploaded together with its AS instance, regardless of where it lands.
+pub fn tlas_build_input_upload_system<T: Pod + Send + Sync>(
     query: Query<(&GlobalTransform, &TLASInstance<T>)>,
     blas: Query<&BLAS>,
     mut uploader: BufferInitializer,
@@ -129,6 +175,7 @@ pub fn tlas_build_input_upload_system<T: Send + Sync + 'static>(
     mut ctx: SubmissionState,
 ) {
     assert!(tlas_resource.tlas_input_buffer.is_none());
+    tlas_resource.tlas_per_instance_data = None;
     // There will be some duplicated entires but that's fine.
     let referenced_blas = query
         .iter()
@@ -174,6 +221,24 @@ pub fn tlas_build_input_upload_system<T: Send + Sync + 'static>(
             },
         );
         tlas_resource.tlas_input_buffer = Some((buffer, referenced_blas));
+
+        if std::mem::size_of::<T>() > 0 {
+            let per_instance_data_buffer = uploader.create_preinitialized_buffer(
+                encoder,
+                Layout::new::<T>().repeat(num_instances as usize).unwrap().0,
+                |dst| {
+                    let slice: &mut [T] = bytemuck::cast_slice_mut(dst);
+                    for (i, (_, instance)) in query
+                        .iter()
+                        .filter(|(_, instance)| blas.contains(instance.blas) && !instance.disabled)
+                        .enumerate()
+                    {
+                        slice[i] = instance.data;
+                    }
+                },
+            );
+            tlas_resource.tlas_per_instance_data = Some(per_instance_data_buffer);
+        }
     });
 }
 
@@ -224,6 +289,7 @@ pub fn tlas_build_system<T: Send + Sync + 'static>(
         device.clone(),
         tlas_backing_buffer,
         vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+        info.flags,
     )
     .unwrap();
     let scratch_offset_alignment: u64 = device
@@ -297,6 +363,18 @@ impl<T> Hash for TLASBuilderSet<T> {
     }
 }
 
+/// Registers `TLASInstance<T>` as a component, inserts a `TLAS<T>` resource,
+/// and schedules `tlas_build_input_upload_system::<T>` →
+/// `tlas_build_system::<T>` in `PostUpdate`.
+///
+/// Add one plugin instance per distinct `T` you want to consume from
+/// shaders. Each `T` gets its own TLAS, so you can bind different
+/// per-instance payloads to different ray-tracing pipelines without sharing.
+///
+/// `T` must satisfy `Pod + Send + Sync + TypePath`; `TypePath` is used when
+/// registering `TLASInstance<T>` for reflection. For your own types, derive
+/// it via `#[derive(bevy_reflect::TypePath)]` (a standalone derive is fine,
+/// you don't need full `Reflect`).
 pub struct TLASBuilderPlugin<T = ()> {
     _marker: std::marker::PhantomData<T>,
 }
@@ -307,7 +385,7 @@ impl<T> Default for TLASBuilderPlugin<T> {
         }
     }
 }
-impl<T: Send + Sync + TypePath + 'static> Plugin for TLASBuilderPlugin<T> {
+impl<T: Pod + Send + Sync + TypePath> Plugin for TLASBuilderPlugin<T> {
     fn build(&self, app: &mut bevy_app::App) {
         app.add_systems(
             PostUpdate,
@@ -324,6 +402,7 @@ impl<T: Send + Sync + TypePath + 'static> Plugin for TLASBuilderPlugin<T> {
             tlas: None,
             tlas_input_buffer: None,
             _marker: PhantomData::<T>,
+            tlas_per_instance_data: None,
         });
 
         app.register_type::<TLASInstance<T>>();
