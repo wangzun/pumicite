@@ -67,11 +67,11 @@ struct PushConstants {
 [vk::push_constant]
 PushConstants pc;
 
-[vk::binding(0, 0)]
+[vk::binding(1, 0)]
 RaytracingAccelerationStructure scene;
 
 [format("rgba8")]
-[vk::binding(1, 0)]
+[vk::binding(0, 0)]
 RWTexture2D<float4> outputImage;
 
 struct RayPayload {

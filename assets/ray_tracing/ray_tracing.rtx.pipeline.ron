@@ -14,11 +14,9 @@ RayTracingPipeline(
         ),
         HitGroup(
             ty: Triangles,
-            closest_hit: Singleton(
-                (
-                    path: "ray_tracing/ray_tracing.spv",
-                    entry_point: "closestHitMain",
-                )
+            closest_hit: (
+                path: "ray_tracing/ray_tracing.spv",
+                entry_point: "closestHitMain",
             ),
         ),
     ],
@@ -35,13 +33,13 @@ RayTracingPipeline(
                         bindings: [
                             (
                                 binding: 0,
-                                ty: AccelerationStructure,
+                                ty: StorageImage,
                                 count: 1,
                                 stages: [RayGen],
                             ),
                             (
                                 binding: 1,
-                                ty: StorageImage,
+                                ty: AccelerationStructure,
                                 count: 1,
                                 stages: [RayGen],
                             ),

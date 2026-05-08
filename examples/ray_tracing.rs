@@ -571,17 +571,17 @@ fn trace_gltf_scene(
             vk::WriteDescriptorSet {
                 dst_binding: 0,
                 descriptor_count: 1,
-                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                p_next: (&mut acceleration_structure_info
-                    as *mut vk::WriteDescriptorSetAccelerationStructureKHR)
-                    .cast(),
+                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                p_image_info: &output_image_info,
                 ..Default::default()
             },
             vk::WriteDescriptorSet {
                 dst_binding: 1,
                 descriptor_count: 1,
-                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-                p_image_info: &output_image_info,
+                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                p_next: (&mut acceleration_structure_info
+                    as *mut vk::WriteDescriptorSetAccelerationStructureKHR)
+                    .cast(),
                 ..Default::default()
             },
         ];
