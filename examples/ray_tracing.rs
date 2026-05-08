@@ -94,6 +94,12 @@ struct RayTracingExample {
     pipeline: Handle<RayTracingPipeline>,
 }
 
+#[derive(Resource)]
+struct PathTracingSettings {
+    samples_per_pixel: u32,
+    max_bounces: u32,
+}
+
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -105,6 +111,10 @@ fn setup(
     let base_library = asset_server.load("ray_tracing/ray_tracing.rtx.pipeline.ron");
     let pipeline = rtx_pipelines.add_pipeline(base_library);
     commands.insert_resource(RayTracingExample { pipeline });
+    commands.insert_resource(PathTracingSettings {
+        samples_per_pixel: 4,
+        max_bounces: 2,
+    });
     commands.insert_resource(PreparedRayScene::default());
 }
 
@@ -487,9 +497,11 @@ fn trace_gltf_scene(
     mut ring_buffer: BufferInitializer,
     mut prepared_scene: ResMut<PreparedRayScene>,
     ray_tracing_example: Res<RayTracingExample>,
+    path_tracing_settings: Res<PathTracingSettings>,
     pipelines: Res<Assets<RayTracingPipeline>>,
     tlas: Res<TLAS<RayTracingInstanceData>>,
     heap: Res<DescriptorHeap>,
+    mut frame_index: Local<u32>,
 ) {
     let Ok((mut swapchain_image, mut target)) = swapchain.single_mut() else {
         return;
@@ -622,9 +634,13 @@ fn trace_gltf_scene(
                 p_materials: materials.device_address(),
                 p_camera: camera.device_address(),
                 sun_direction: Vec3::new(-0.4, -0.8, -0.3).normalize().to_array(),
-                _padding: 0,
+                samples_per_pixel: path_tracing_settings.samples_per_pixel.max(1),
+                max_bounces: path_tracing_settings.max_bounces,
+                frame_index: *frame_index,
+                _padding: [0; 2],
             }),
         );
+        *frame_index = frame_index.wrapping_add(1);
 
         let dispatch_extent = target_texture.color.image().extent();
         encoder.trace_rays(
@@ -700,7 +716,10 @@ struct PushConstants {
     p_materials: u64,
     p_camera: u64,
     sun_direction: [f32; 3],
-    _padding: u32,
+    samples_per_pixel: u32,
+    max_bounces: u32,
+    frame_index: u32,
+    _padding: [u32; 2],
 }
 
 fn acceleration_index_type(index_type: vk::IndexType) -> vk::IndexType {

@@ -23,9 +23,9 @@ RayTracingPipeline(
     layout: Inline(
         PipelineLayout(
             push_constants: {
-                RayGen: (0, 64),
-                ClosestHit: (0, 64),
-                Miss: (0, 64),
+                RayGen: (0, 80),
+                ClosestHit: (0, 80),
+                Miss: (0, 80),
             },
             sets: [
                 Inline(
@@ -53,6 +53,6 @@ RayTracingPipeline(
         ),
     ),
     max_ray_recursion_depth: 1,
-    max_ray_payload_size: 16,
+    max_ray_payload_size: 96,
     max_hit_attribute_size: 8,
 )
