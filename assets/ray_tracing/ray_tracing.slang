@@ -113,7 +113,9 @@ void rayGenMain()
     float2 uv = (float2(pixel) + 0.5) / float2(extent);
     float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
-    float4 world = mul(pc.camera.invViewProjection, float4(ndc, 0.0, 1.0));
+    // The example camera uses a reversed-Z infinite projection. Clip-space z = 0
+    // is the infinite far plane, so unproject the near plane instead.
+    float4 world = mul(pc.camera.invViewProjection, float4(ndc, 1.0, 1.0));
     world.xyz /= world.w;
 
     RayDesc ray;
@@ -124,7 +126,7 @@ void rayGenMain()
 
     RayPayload payload;
     payload.color = float3(0.55, 0.70, 0.95);
-    TraceRay(scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xff, 0, 0, 0, ray, payload);
+    TraceRay(scene, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
 
     outputImage[pixel] = float4(payload.color, 1.0);
 }
