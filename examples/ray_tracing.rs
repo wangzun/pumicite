@@ -112,6 +112,7 @@ fn setup(
 struct RayTarget {
     texture: Option<GPUMutex<RayTargetTexture>>,
     state: ResourceState,
+    extent: UVec2,
 }
 
 struct RayTargetTexture {
@@ -154,6 +155,7 @@ fn ray_target_resize(
     let Some(current_swapchain_image) = swapchain_image.current_image() else {
         return;
     };
+    println!("Resizing ray target...");
     let extent = current_swapchain_image.extent().xy();
     let old_extent = target
         .texture
@@ -164,6 +166,7 @@ fn ray_target_resize(
             RayTargetTexture::new(allocator.clone(), extent).unwrap(),
         ));
         target.state = ResourceState::default();
+        target.extent = extent;
     }
 }
 
@@ -324,21 +327,24 @@ fn prepare_ray_scene(
     mut ring_buffer: BufferInitializer,
     mut ctx: SubmissionState,
     mut prepared_scene: ResMut<PreparedRayScene>,
-    targets: Query<&SwapchainImage, With<bevy::window::PrimaryWindow>>,
+    targets: Query<&RayTarget, With<bevy::window::PrimaryWindow>>,
 ) {
     let Ok(camera_transform) = cameras.single() else {
         return;
     };
-    let Ok(swapchain_image) = targets.single() else {
+    let Ok(ray_target) = targets.single() else {
         return;
     };
-    let Some(current_swapchain_image) = swapchain_image.current_image() else {
-        return;
-    };
+    println!("Preparing ray tracing scene 00000000000...");
+    // let Some(current_swapchain_image) = ray_target.current_image() else {
+    //     return;
+    // };
+
+    println!("Preparing ray tracing scene...");
 
     ctx.record(|encoder| {
         let aspect =
-            current_swapchain_image.extent().x as f32 / current_swapchain_image.extent().y as f32;
+            ray_target.extent.x as f32 / ray_target.extent.y as f32;
         let view = camera_transform.to_matrix().inverse();
         let projection =
             Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_3, aspect, 0.1);
@@ -499,9 +505,11 @@ fn trace_gltf_scene(
     let Some(pipeline) = pipelines.get(&ray_tracing_example.pipeline) else {
         return;
     };
+    println!("succ get pipeline ...");
     let Some(tlas_inner) = tlas.get() else {
         return;
     };
+    println!("Tracing rays...");
     ctx.record(|encoder| {
         let Some(current_swapchain_image) = swapchain_image.current_image() else {
             return;
