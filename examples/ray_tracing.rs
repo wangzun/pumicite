@@ -155,7 +155,6 @@ fn ray_target_resize(
     let Some(current_swapchain_image) = swapchain_image.current_image() else {
         return;
     };
-    println!("Resizing ray target...");
     let extent = current_swapchain_image.extent().xy();
     let old_extent = target
         .texture
@@ -335,13 +334,6 @@ fn prepare_ray_scene(
     let Ok(ray_target) = targets.single() else {
         return;
     };
-    println!("Preparing ray tracing scene 00000000000...");
-    // let Some(current_swapchain_image) = ray_target.current_image() else {
-    //     return;
-    // };
-
-    println!("Preparing ray tracing scene...");
-
     ctx.record(|encoder| {
         let aspect =
             ray_target.extent.x as f32 / ray_target.extent.y as f32;
@@ -505,11 +497,9 @@ fn trace_gltf_scene(
     let Some(pipeline) = pipelines.get(&ray_tracing_example.pipeline) else {
         return;
     };
-    println!("succ get pipeline ...");
     let Some(tlas_inner) = tlas.get() else {
         return;
     };
-    println!("Tracing rays...");
     ctx.record(|encoder| {
         let Some(current_swapchain_image) = swapchain_image.current_image() else {
             return;
@@ -616,6 +606,7 @@ fn trace_gltf_scene(
         let Some(instance_data) = tlas.tlas_per_instance_data.as_ref() else {
             return;
         };
+
         let instance_data = encoder.lock(
             instance_data,
             vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,

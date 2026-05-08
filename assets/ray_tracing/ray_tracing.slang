@@ -133,7 +133,8 @@ void rayGenMain()
 void missMain(inout RayPayload payload)
 {
     float t = saturate(WorldRayDirection().y * 0.5 + 0.5);
-    payload.color = lerp(float3(0.03, 0.04, 0.06), float3(0.55, 0.70, 0.95), t);
+    // payload.color = lerp(float3(0.03, 0.04, 0.06), float3(0.55, 0.70, 0.95), t);
+    payload.color = float3(0.55, 0.70, 0.95);
 }
 
 [shader("closesthit")]
