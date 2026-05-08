@@ -1,0 +1,60 @@
+RayTracingPipeline(
+    stages: [
+        RayGen(
+            shader: (
+                path: "ray_tracing/ray_tracing.spv",
+                entry_point: "rayGenMain",
+            ),
+        ),
+        Miss(
+            shader: (
+                path: "ray_tracing/ray_tracing.spv",
+                entry_point: "missMain",
+            ),
+        ),
+        HitGroup(
+            ty: Triangles,
+            closest_hit: Singleton(
+                (
+                    path: "ray_tracing/ray_tracing.spv",
+                    entry_point: "closestHitMain",
+                )
+            ),
+        ),
+    ],
+    layout: Inline(
+        PipelineLayout(
+            push_constants: {
+                RayGen: (0, 64),
+                ClosestHit: (0, 64),
+                Miss: (0, 64),
+            },
+            sets: [
+                Inline(
+                    DescriptorSetLayout(
+                        bindings: [
+                            (
+                                binding: 0,
+                                ty: AccelerationStructure,
+                                count: 1,
+                                stages: [RayGen],
+                            ),
+                            (
+                                binding: 1,
+                                ty: StorageImage,
+                                count: 1,
+                                stages: [RayGen],
+                            ),
+                        ],
+                        push_descriptor: true,
+                    )
+                ),
+                ResourceHeap,
+                SamplerHeap,
+            ],
+        ),
+    ),
+    max_ray_recursion_depth: 1,
+    max_ray_payload_size: 16,
+    max_hit_attribute_size: 8,
+)

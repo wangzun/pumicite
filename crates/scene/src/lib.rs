@@ -89,6 +89,8 @@ impl Primitive {
 pub struct Attribute {
     pub buffer: Arc<Buffer>,
     pub offset: usize,
+    pub count: usize,
+    pub stride: usize,
 }
 
 #[derive(Component, Reflect)]

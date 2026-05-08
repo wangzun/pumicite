@@ -439,7 +439,9 @@ impl AssetLoader for GltfLoader {
                                         allocator.clone(),
                                         size,
                                         gpu_view.alignment as u64,
-                                        vk::BufferUsageFlags::INDEX_BUFFER,
+                                        vk::BufferUsageFlags::INDEX_BUFFER
+                                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                                            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                                     )?;
                                     gpu_view.buffer = Some(Arc::new(new_buffer));
                                     let buffer_ref: &'a mut Buffer =
@@ -485,7 +487,8 @@ impl AssetLoader for GltfLoader {
                                         gpu_view.alignment as u64,
                                         // For usage, we're assuming vertex pulling.
                                         vk::BufferUsageFlags::STORAGE_BUFFER
-                                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                                            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                                     )?;
                                     gpu_view.buffer = Some(Arc::new(new_buffer));
                                     let buffer_ref: &'a mut Buffer =
@@ -879,6 +882,8 @@ impl GltfLoader {
                                     .unwrap()
                                     .clone(),
                                 offset: attribute.offset(),
+                                count: attribute.count(),
+                                stride: view.stride().unwrap_or(attribute.size()),
                             });
                     }
                     if let Some(material_index) = primitive.material().index() {
